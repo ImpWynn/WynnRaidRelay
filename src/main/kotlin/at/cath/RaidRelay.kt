@@ -15,6 +15,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
@@ -30,17 +31,17 @@ data class RaidReport(val type: String, val players: List<String>)
 
 class RaidCooldownManager {
     private val cooldowns = ConcurrentHashMap<String, Long>()
-    private val cooldownDuration = 10 * 1000L // 10s
+    private val cooldownDuration = TimeUnit.SECONDS.toNanos(10)
 
     fun shouldProcess(raidType: String): Boolean {
-        val now = System.currentTimeMillis()
-        val lastProcessed = cooldowns[raidType]
-        return if (lastProcessed == null || now - lastProcessed > cooldownDuration) {
-            cooldowns[raidType] = now
-            true
-        } else {
-            false
-        }
+        val now = System.nanoTime()
+        return cooldowns.compute(raidType) { _, lastProcessed ->
+            if (lastProcessed == null || now - lastProcessed > cooldownDuration) {
+                now
+            } else {
+                lastProcessed
+            }
+        } == now
     }
 }
 
