@@ -27,7 +27,7 @@ private val raids = mapOf(
 )
 
 @Serializable
-data class RaidReport(val type: String, val players: List<String>)
+data class RaidReport(val raidType: String, val players: List<String>)
 
 class RaidCooldownManager {
     private val cooldowns = ConcurrentHashMap<String, Long>()
@@ -54,12 +54,14 @@ fun main() {
 
     embeddedServer(Netty, port = 8080) {
         install(ContentNegotiation) {
-            json()
+            json(json = kotlinx.serialization.json.Json {
+                ignoreUnknownKeys = true
+            })
         }
         routing {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
-                if (!cooldownManager.shouldProcess(raidReport.type)) {
+                if (!cooldownManager.shouldProcess(raidReport.raidType)) {
                     call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
                 }
@@ -67,11 +69,11 @@ fun main() {
                 val response = sendDiscordWebhook(
                     webhookUrl,
                     raidMsg(
-                        raidReport.type,
+                        raidReport.raidType,
                         raidReport.players,
-                        raids[raidReport.type] ?: run {
+                        raids[raidReport.raidType] ?: run {
                             call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
-                            log.error("Unknown raid type: ${raidReport.type}")
+                            log.error("Unknown raid type: ${raidReport.raidType}")
                             return@post
                         }
                     )
@@ -81,7 +83,7 @@ fun main() {
                     log.error("Failed to send raid message: ${response.status}")
                     return@post
                 }
-                log.info("Processed raid completion for '${raidReport.type}' with players: ${raidReport.players}")
+                log.info("Processed raid completion for '${raidReport.raidType}' with players: ${raidReport.players}")
                 call.respond(HttpStatusCode.OK, "Raid message processed")
             }
         }
