@@ -31,17 +31,17 @@ data class RaidReport(val raidType: String, val players: List<String>)
 
 class RaidCooldownManager {
     private val cooldowns = ConcurrentHashMap<String, Long>()
-    private val cooldownDuration = TimeUnit.SECONDS.toNanos(10)
+    private val cooldownDuration = TimeUnit.SECONDS.toMillis(10)
 
     fun shouldProcess(raidType: String): Boolean {
-        val now = System.nanoTime()
-        return cooldowns.compute(raidType) { _, lastProcessed ->
-            if (lastProcessed == null || now - lastProcessed > cooldownDuration) {
-                now
-            } else {
-                lastProcessed
-            }
-        } == now
+        val now = System.currentTimeMillis()
+        val previous = cooldowns.putIfAbsent(raidType, now) ?: return true
+
+        if (now - previous > cooldownDuration) {
+            return cooldowns.replace(raidType, previous, now)
+        }
+
+        return false
     }
 }
 
