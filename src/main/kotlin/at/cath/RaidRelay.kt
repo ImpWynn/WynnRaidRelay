@@ -1,6 +1,7 @@
 package at.cath
 
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -14,6 +15,9 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -27,7 +31,9 @@ private val raids = mapOf(
 )
 
 @Serializable
-data class RaidReport(val raidType: String, val players: List<String>)
+data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
+
+data class PlayerInfo(val name: String, val guild: String?)
 
 class RaidCooldownManager {
     private val cooldowns = ConcurrentHashMap<String, Long>()
@@ -45,22 +51,50 @@ class RaidCooldownManager {
     }
 }
 
+suspend fun fetchPlayerInfo(uuid: String): PlayerInfo? {
+    return try {
+        val response: HttpResponse = client.get("https://api.wynncraft.com/v3/player/$uuid")
+        if (response.status.isSuccess()) {
+            val jsonResponse = response.body<String>()
+            val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
+
+            PlayerInfo(
+                name = parsedJson["username"]?.jsonPrimitive?.content ?: "Unknown",
+                guild = parsedJson["guild"]?.jsonObject?.get("name")?.jsonPrimitive?.content
+            )
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 fun main() {
-    val webhookUrl =
-        System.getenv("DISCORD_WEBHOOK_URL").takeIf {
-            it.matches(WEBHOOK_PATTERN)
-        } ?: throw IllegalArgumentException("DISCORD_WEBHOOK_URL is required")
+    val webhookUrl = System.getenv("DISCORD_WEBHOOK_URL").takeIf {
+        it.matches(WEBHOOK_PATTERN)
+    } ?: throw IllegalArgumentException("DISCORD_WEBHOOK_URL is required")
+
+    val expectedGuild = System.getenv("GUILD")
+        ?: throw IllegalArgumentException("GUILD environment variable is required")
+
     val cooldownManager = RaidCooldownManager()
 
     embeddedServer(Netty, port = 8080) {
         install(ContentNegotiation) {
-            json(json = kotlinx.serialization.json.Json {
-                ignoreUnknownKeys = true
-            })
+            json(json = Json)
         }
         routing {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
+
+                val playerInfo = fetchPlayerInfo(raidReport.reporterUuid)
+                if (playerInfo == null || playerInfo.guild != expectedGuild) {
+                    call.respond(HttpStatusCode.Forbidden, "Unauthorized")
+                    log.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
+                    return@post
+                }
+
                 if (!cooldownManager.shouldProcess(raidReport.raidType)) {
                     call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
@@ -83,7 +117,10 @@ fun main() {
                     log.error("Failed to send raid message: ${response.status}")
                     return@post
                 }
-                log.info("Processed raid completion for '${raidReport.raidType}' with players: ${raidReport.players}")
+                log.info(
+                    "Processed raid completion reported by ${playerInfo.name} " +
+                            "for '${raidReport.raidType}' with players: ${raidReport.players}"
+                )
                 call.respond(HttpStatusCode.OK, "Raid message processed")
             }
         }
