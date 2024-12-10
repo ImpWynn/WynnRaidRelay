@@ -88,15 +88,16 @@ fun main() {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
 
+                if (!cooldownManager.shouldProcess(raidReport.raidType)) {
+                    log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
+                    call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
+                    return@post
+                }
+
                 val playerInfo = fetchPlayerInfo(raidReport.reporterUuid)
                 if (playerInfo == null || playerInfo.guild != expectedGuild) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     log.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
-                    return@post
-                }
-
-                if (!cooldownManager.shouldProcess(raidReport.raidType)) {
-                    call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
                 }
 
