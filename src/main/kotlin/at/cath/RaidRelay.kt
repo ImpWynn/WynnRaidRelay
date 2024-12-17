@@ -28,8 +28,9 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
-private val guild_members = mutableSetOf<String>()
-private var last_guild_update = 0L
+private val ranks = listOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
+private val guildMembers = mutableSetOf<String>()
+private var lastGuildUpdate = 0L
 
 @Serializable
 data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
@@ -51,22 +52,18 @@ class RaidCooldownManager {
 }
 
 suspend fun updateGuild() {
-    try {
-        val guild = System.getenv("GUILD")
-        val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
-        if (response.status.isSuccess()) {
-            val jsonResponse = response.body<String>()
-            val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
+    val guild = System.getenv("GUILD")
+    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
+    if (response.status.isSuccess()) {
+        val jsonResponse = response.body<String>()
+        val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
-            val members = parsedJson["members"]!!.jsonObject
-            guild_members.clear()
-            val ranks = listOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
-            for (rank in ranks) {
-                guild_members.addAll(members[rank]?.jsonObject?.keys.orEmpty())
-            }
-            last_guild_update = System.currentTimeMillis()
+        val members = parsedJson["members"]!!.jsonObject
+        guild_members.clear()
+        for (rank in ranks) {
+            guild_members.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
-    } catch (_: Exception) {
+        last_guild_update = System.currentTimeMillis()
     }
 }
 
