@@ -17,7 +17,6 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -29,11 +28,12 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
+private val ranks = listOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
+private val guildMembers = mutableSetOf<String>()
+private var lastGuildUpdate = 0L
 
 @Serializable
 data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
-
-data class PlayerInfo(val name: String, val guild: String?)
 
 class RaidCooldownManager {
     private val cooldowns = ConcurrentHashMap<String, Long>()
@@ -51,23 +51,26 @@ class RaidCooldownManager {
     }
 }
 
-suspend fun fetchPlayerInfo(uuid: String): PlayerInfo? {
-    return try {
-        val response: HttpResponse = client.get("https://api.wynncraft.com/v3/player/$uuid")
-        if (response.status.isSuccess()) {
-            val jsonResponse = response.body<String>()
-            val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
+suspend fun updateGuild() {
+    val guild = System.getenv("GUILD")
+    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
+    if (response.status.isSuccess()) {
+        val jsonResponse = response.body<String>()
+        val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
-            PlayerInfo(
-                name = parsedJson["username"]?.jsonPrimitive?.content ?: "Unknown",
-                guild = parsedJson["guild"]?.jsonObject?.get("name")?.jsonPrimitive?.content
-            )
-        } else {
-            null
+        val members = parsedJson["members"]!!.jsonObject
+        guildMembers.clear()
+        for (rank in ranks) {
+            guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
-    } catch (e: Exception) {
-        null
+        lastGuildUpdate = System.currentTimeMillis()
     }
+}
+
+suspend fun isInGuild(uuid: String): Boolean {
+    if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
+        updateGuild()
+    return uuid in guildMembers
 }
 
 fun main() {
@@ -75,8 +78,7 @@ fun main() {
         it.matches(WEBHOOK_PATTERN)
     } ?: throw IllegalArgumentException("DISCORD_WEBHOOK_URL is required")
 
-    val expectedGuild = System.getenv("GUILD")
-        ?: throw IllegalArgumentException("GUILD environment variable is required")
+    System.getenv("GUILD") ?: throw IllegalArgumentException("GUILD environment variable is required")
 
     val cooldownManager = RaidCooldownManager()
 
@@ -94,8 +96,7 @@ fun main() {
                     return@post
                 }
 
-                val playerInfo = fetchPlayerInfo(raidReport.reporterUuid)
-                if (playerInfo == null || playerInfo.guild != expectedGuild) {
+                if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     log.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
                     return@post
@@ -119,7 +120,7 @@ fun main() {
                     return@post
                 }
                 log.info(
-                    "Processed raid completion reported by ${playerInfo.name} " +
+                    "Processed raid completion reported by ${raidReport.reporterUuid} " +
                             "for '${raidReport.raidType}' with players: ${raidReport.players}"
                 )
                 call.respond(HttpStatusCode.OK, "Raid message processed")
