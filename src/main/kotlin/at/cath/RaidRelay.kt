@@ -59,18 +59,18 @@ suspend fun updateGuild() {
         val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
         val members = parsedJson["members"]!!.jsonObject
-        guild_members.clear()
+        guildMembers.clear()
         for (rank in ranks) {
-            guild_members.addAll(members[rank]?.jsonObject?.keys.orEmpty())
+            guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
-        last_guild_update = System.currentTimeMillis()
+        lastGuildUpdate = System.currentTimeMillis()
     }
 }
 
 suspend fun isInGuild(uuid: String): Boolean {
-    if (System.currentTimeMillis() - last_guild_update > TimeUnit.MINUTES.toMillis(10))
+    if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
         updateGuild()
-    return uuid in guild_members
+    return uuid in guildMembers
 }
 
 fun main() {
