@@ -28,7 +28,7 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
-private val ranks = listOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
+private val ranks = arrayOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
 private val guildMembers = mutableSetOf<String>()
 private var lastGuildUpdate = 0L
 
@@ -59,18 +59,18 @@ suspend fun updateGuild() {
         val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
         val members = parsedJson["members"]!!.jsonObject
-        guild_members.clear()
+        guildMembers.clear()
         for (rank in ranks) {
-            guild_members.addAll(members[rank]?.jsonObject?.keys.orEmpty())
+            guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
-        last_guild_update = System.currentTimeMillis()
+        lastGuildUpdate = System.currentTimeMillis()
     }
 }
 
 suspend fun isInGuild(uuid: String): Boolean {
-    if (System.currentTimeMillis() - last_guild_update > TimeUnit.MINUTES.toMillis(10))
+    if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
         updateGuild()
-    return uuid in guild_members
+    return uuid in guildMembers
 }
 
 fun main() {
