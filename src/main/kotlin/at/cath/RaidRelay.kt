@@ -28,26 +28,30 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
-private val ranks = listOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
+private val ranks = arrayOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
 private val guildMembers = mutableSetOf<String>()
 private var lastGuildUpdate = 0L
 
 @Serializable
 data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
 
-class RaidCooldownManager {
-    private val cooldowns = ConcurrentHashMap<String, Long>()
-    private val cooldownDuration = TimeUnit.SECONDS.toMillis(10)
+private val cooldowns = ConcurrentHashMap<String, Long>()
+private val cooldownDuration = TimeUnit.SECONDS.toMillis(10)
 
-    fun shouldProcess(raidType: String): Boolean {
+private fun shouldProcess(raidType: String): Boolean {
+    while (true) {
         val now = System.currentTimeMillis()
-        val previous = cooldowns.putIfAbsent(raidType, now) ?: return true
+        val previous = cooldowns.get(raidType)
 
-        if (now - previous > cooldownDuration) {
-            return cooldowns.replace(raidType, previous, now)
+        if (previous == null) {
+            if (cooldowns.putIfAbsent(raidType, now) == null) return true
+            continue
         }
 
-        return false
+        if (now - previous <= cooldownDuration) return false
+
+        if (cooldowns.replace(raidType, previous, now)) return true
+        continue
     }
 }
 
@@ -80,8 +84,6 @@ fun main() {
 
     System.getenv("GUILD") ?: throw IllegalArgumentException("GUILD environment variable is required")
 
-    val cooldownManager = RaidCooldownManager()
-
     embeddedServer(Netty, port = 8080) {
         install(ContentNegotiation) {
             json(json = Json)
@@ -90,7 +92,7 @@ fun main() {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
 
-                if (!cooldownManager.shouldProcess(raidReport.raidType)) {
+                if (!shouldProcess(raidReport.raidType)) {
                     log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
                     call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
