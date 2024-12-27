@@ -41,7 +41,7 @@ private val cooldownDuration = TimeUnit.SECONDS.toMillis(10)
 private fun shouldProcess(raidType: String): Boolean {
     while (true) {
         val now = System.currentTimeMillis()
-        val previous = cooldowns.get(raidType)
+        val previous = cooldowns[raidType]
 
         if (previous == null) {
             if (cooldowns.putIfAbsent(raidType, now) == null) return true
@@ -68,6 +68,8 @@ suspend fun updateGuild() {
             guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
         lastGuildUpdate = System.currentTimeMillis()
+    } else {
+        throw IllegalStateException("Failed to update guild members for guild '$guild'")
     }
 }
 
