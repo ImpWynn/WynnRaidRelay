@@ -28,7 +28,6 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
-private val ranks = arrayOf("owner", "chief", "strategist", "captain", "recruiter", "recruit")
 private val guildMembers = mutableSetOf<String>()
 private var lastGuildUpdate = 0L
 
@@ -66,7 +65,8 @@ suspend fun updateGuild() {
 
         val members = parsedJson["members"]!!.jsonObject
         guildMembers.clear()
-        for (rank in ranks) {
+        // first key is "total", skip
+        for (rank in members.keys.drop(1)) {
             guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
         }
         lastGuildUpdate = System.currentTimeMillis()
