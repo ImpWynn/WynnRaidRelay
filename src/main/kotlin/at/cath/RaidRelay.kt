@@ -34,23 +34,25 @@ private var lastGuildUpdate = 0L
 
 @Serializable
 data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
+// we check the first player name since many parties may be running the same raid
+data class UniqueRaidParty(val raidName: String, val firstPlayerName: String)
 
-private val cooldowns = ConcurrentHashMap<String, Long>()
-private val cooldownDuration = TimeUnit.SECONDS.toMillis(10)
+private val cooldowns = ConcurrentHashMap<UniqueRaidParty, Long>()
+private val cooldownDuration = TimeUnit.MINUTES.toMillis(1)
 
-private fun shouldProcess(raidType: String): Boolean {
+private fun shouldProcess(raidKey: UniqueRaidParty): Boolean {
     while (true) {
         val now = System.currentTimeMillis()
-        val previous = cooldowns[raidType]
+        val previous = cooldowns[raidKey]
 
         if (previous == null) {
-            if (cooldowns.putIfAbsent(raidType, now) == null) return true
+            if (cooldowns.putIfAbsent(raidKey, now) == null) return true
             continue
         }
 
         if (now - previous <= cooldownDuration) return false
 
-        if (cooldowns.replace(raidType, previous, now)) return true
+        if (cooldowns.replace(raidKey, previous, now)) return true
         continue
     }
 }
@@ -93,8 +95,9 @@ fun main() {
         routing {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
+                val raidParty = UniqueRaidParty(raidReport.raidType, raidReport.players.first())
 
-                if (!shouldProcess(raidReport.raidType)) {
+                if (!shouldProcess(raidParty)) {
                     log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
                     call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
