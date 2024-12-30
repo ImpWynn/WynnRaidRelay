@@ -19,7 +19,7 @@ dependencies {
     implementation("io.ktor:ktor-client-content-negotiation:${property("ktor_version")}")
     implementation("io.ktor:ktor-server-content-negotiation:${property("ktor_version")}")
     implementation("io.ktor:ktor-serialization-kotlinx-json:${property("ktor_version")}")
-
+    implementation("com.google.guava:guava:${property("guava_version")}")
     implementation("ch.qos.logback:logback-classic:${property("logback_version")}")
 }
 

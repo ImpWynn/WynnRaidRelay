@@ -1,5 +1,6 @@
 package at.cath
 
+import com.google.common.util.concurrent.Striped
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
@@ -19,6 +20,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
@@ -31,8 +34,16 @@ private val raids = mapOf(
 private val guildMembers = mutableSetOf<String>()
 private var lastGuildUpdate = 0L
 
+private val guildUpdateLock = ReentrantLock()
+
+// multiple locks to allow different raid keys to process concurrently
+// collisions possible but does not matter since worst case it will just
+// process two different raid parties sequentially
+private val raidKeyLocks = Striped.lock(32)
+
 @Serializable
 data class RaidReport(val raidType: String, val players: List<String>, val reporterUuid: String)
+
 // we check the first player name since many parties may be running the same raid
 data class UniqueRaidParty(val raidName: String, val firstPlayerName: String)
 
@@ -40,19 +51,16 @@ private val cooldowns = ConcurrentHashMap<UniqueRaidParty, Long>()
 private val cooldownDuration = TimeUnit.MINUTES.toMillis(1)
 
 private fun shouldProcess(raidKey: UniqueRaidParty): Boolean {
-    while (true) {
+    raidKeyLocks.get(raidKey).withLock {
         val now = System.currentTimeMillis()
         val previous = cooldowns[raidKey]
-
         if (previous == null) {
-            if (cooldowns.putIfAbsent(raidKey, now) == null) return true
-            continue
+            cooldowns[raidKey] = now
+            return true
         }
-
         if (now - previous <= cooldownDuration) return false
-
-        if (cooldowns.replace(raidKey, previous, now)) return true
-        continue
+        cooldowns[raidKey] = now
+        return true
     }
 }
 
@@ -76,8 +84,10 @@ suspend fun updateGuild() {
 }
 
 suspend fun isInGuild(uuid: String): Boolean {
+    guildUpdateLock.lock()
     if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
         updateGuild()
+    guildUpdateLock.unlock()
     return uuid in guildMembers
 }
 
@@ -97,9 +107,9 @@ fun main() {
                 val raidReport = call.receive<RaidReport>()
                 val raidParty = UniqueRaidParty(raidReport.raidType, raidReport.players.first())
 
-                if (!shouldProcess(raidParty)) {
-                    log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
-                    call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
+                val raidImg = raids[raidReport.raidType] ?: run {
+                    call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
+                    log.error("Unknown raid type: ${raidReport.raidType}")
                     return@post
                 }
 
@@ -109,16 +119,18 @@ fun main() {
                     return@post
                 }
 
+                if (!shouldProcess(raidParty)) {
+                    log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
+                    call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
+                    return@post
+                }
+
                 val response = sendDiscordWebhook(
                     webhookUrl,
                     raidMsg(
                         raidReport.raidType,
                         raidReport.players,
-                        raids[raidReport.raidType] ?: run {
-                            call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
-                            log.error("Unknown raid type: ${raidReport.raidType}")
-                            return@post
-                        }
+                        raidImg
                     )
                 )
                 if (!response.status.isSuccess()) {
