@@ -15,12 +15,12 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
@@ -31,10 +31,12 @@ private val raids = mapOf(
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
     "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
 )
-private val guildMembers = mutableSetOf<String>()
-private var lastGuildUpdate = 0L
 
-private val guildUpdateLock = ReentrantLock()
+@Volatile
+private var lastGuildUpdate = 0L
+private val guildMembers = mutableSetOf<String>()
+
+private val guildUpdateLock = Mutex()
 
 // multiple locks to allow different raid keys to process concurrently
 // collisions possible but does not matter since worst case it will just
@@ -50,7 +52,7 @@ data class UniqueRaidParty(val raidName: String, val firstPlayerName: String)
 private val cooldowns = ConcurrentHashMap<UniqueRaidParty, Long>()
 private val cooldownDuration = TimeUnit.MINUTES.toMillis(1)
 
-private fun shouldProcess(raidKey: UniqueRaidParty): Boolean {
+fun shouldProcess(raidKey: UniqueRaidParty): Boolean {
     raidKeyLocks.get(raidKey).withLock {
         val now = System.currentTimeMillis()
         val previous = cooldowns[raidKey]
@@ -84,11 +86,14 @@ suspend fun updateGuild() {
 }
 
 suspend fun isInGuild(uuid: String): Boolean {
-    guildUpdateLock.lock()
-    if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
-        updateGuild()
-    guildUpdateLock.unlock()
-    return uuid in guildMembers
+    try {
+        guildUpdateLock.lock()
+        if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
+            updateGuild()
+        return uuid in guildMembers
+    } finally {
+        guildUpdateLock.unlock()
+    }
 }
 
 fun main() {
