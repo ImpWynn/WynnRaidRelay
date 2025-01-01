@@ -36,15 +36,20 @@ private val guildMembers = mutableSetOf<String>()
 
 private val guildUpdateLock = Mutex()
 
+private val log = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
+
 @Serializable
 data class RaidReport(
     val raidType: String,
     val players: List<String>,
     val reporterUuid: String
 ) {
-    // override since we want to use the hash code as a key for a unique raid,
-    // meaning we want to ignore the reporterUuid here
-    override fun hashCode(): Int = 31 * raidType.hashCode() + players.hashCode()
+    override fun hashCode(): Int {
+        val hash = 31 * raidType.hashCode() + players.hashCode()
+        log.debug("Generated hash for raid '{}' with players {}: {}", raidType, players, hash)
+        return hash
+    }
+
     override fun equals(other: Any?): Boolean = when {
         this === other -> true
         other !is RaidReport -> false
@@ -59,12 +64,28 @@ private val cooldownDuration = TimeUnit.MINUTES.toMillis(1)
 fun shouldProcess(raidReport: RaidReport): Boolean {
     val now = System.currentTimeMillis()
     val raidKey = raidReport.hashCode()
-    val previous = cooldowns.putIfAbsent(raidKey, now) ?: return true
 
-    if (now - previous > cooldownDuration) {
-        return cooldowns.replace(raidKey, previous, now)
+    log.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
+    log.debug("Current cooldowns map state: {}", cooldowns.toMap())
+
+    val previous = cooldowns.putIfAbsent(raidKey, now)
+    log.debug("putIfAbsent for key $raidKey returned previous value: $previous")
+
+    if (previous == null) {
+        log.debug("No previous timestamp found, allowing raid")
+        return true
     }
 
+    val timeDiff = now - previous
+    log.debug("Time difference: ${timeDiff}ms (cooldown: ${cooldownDuration}ms)")
+
+    if (timeDiff > cooldownDuration) {
+        val replaced = cooldowns.replace(raidKey, previous, now)
+        log.debug("Cooldown expired, replace operation succeeded: $replaced")
+        return replaced
+    }
+
+    log.debug("Raid blocked by cooldown: ${cooldownDuration - timeDiff}ms remaining")
     return false
 }
 
