@@ -185,23 +185,27 @@ suspend fun sendDiscordWebhook(webhookUrl: String, message: String): HttpRespons
     }
 }
 
+private fun escapeMarkdown(text: String): String {
+    return text.replace(Regex("([\\\\_*~`>|])")) { "\\\\${it.value}" }
+}
+
 private fun raidMsg(raidName: String, players: List<String>, raidImgUrl: String): String {
     return """
         {
             "content": null,
             "embeds": [
                 {
-                    "title": "Completion: $raidName",
+                    "title": "Completion: ${escapeMarkdown(raidName)}",
                     "color": null,
                     "fields": [
                         {
                             "name": "Player 1",
-                            "value": "${players.getOrElse(0) { "N/A" }}",
+                            "value": "${escapeMarkdown(players.getOrElse(0) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 2",
-                            "value": "${players.getOrElse(1) { "N/A" }}",
+                            "value": "${escapeMarkdown(players.getOrElse(1) { "N/A" })}",
                             "inline": true
                         },
                         {
@@ -210,12 +214,12 @@ private fun raidMsg(raidName: String, players: List<String>, raidImgUrl: String)
                         },
                         {
                             "name": "Player 3",
-                            "value": "${players.getOrElse(2) { "N/A" }}",
+                            "value": "${escapeMarkdown(players.getOrElse(2) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 4",
-                            "value": "${players.getOrElse(3) { "N/A" }}",
+                            "value": "${escapeMarkdown(players.getOrElse(3) { "N/A" })}",
                             "inline": true
                         }
                     ],
