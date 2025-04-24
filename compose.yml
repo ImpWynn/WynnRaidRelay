@@ -4,4 +4,6 @@ services:
     ports:
       - "61000:8080"
     environment:
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - GUILD
+      - DISCORD_WEBHOOK_URL
+    restart: unless-stopped
