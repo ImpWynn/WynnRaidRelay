@@ -36,7 +36,7 @@ private val guildMembers = mutableSetOf<String>()
 
 private val guildUpdateLock = Mutex()
 
-private val log = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
+private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
 
 @Serializable
 data class RaidReport(
@@ -46,7 +46,7 @@ data class RaidReport(
 ) {
     override fun hashCode(): Int {
         val hash = 31 * raidType.hashCode() + players.hashCode()
-        log.debug("Generated hash for raid '{}' with players {}: {}", raidType, players, hash)
+        logger.debug("Generated hash for raid '{}' with players {}: {}", raidType, players, hash)
         return hash
     }
 
@@ -65,27 +65,27 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
     val now = System.currentTimeMillis()
     val raidKey = raidReport.hashCode()
 
-    log.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
-    log.debug("Current cooldowns map state: {}", cooldowns.toMap())
+    logger.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
+    logger.debug("Current cooldowns map state: {}", cooldowns.toMap())
 
     val previous = cooldowns.putIfAbsent(raidKey, now)
-    log.debug("putIfAbsent for key $raidKey returned previous value: $previous")
+    logger.debug("putIfAbsent for key $raidKey returned previous value: $previous")
 
     if (previous == null) {
-        log.debug("No previous timestamp found, allowing raid")
+        logger.debug("No previous timestamp found, allowing raid")
         return true
     }
 
     val timeDiff = now - previous
-    log.debug("Time difference: ${timeDiff}ms (cooldown: ${cooldownDuration}ms)")
+    logger.debug("Time difference: ${timeDiff}ms (cooldown: ${cooldownDuration}ms)")
 
     if (timeDiff > cooldownDuration) {
         val replaced = cooldowns.replace(raidKey, previous, now)
-        log.debug("Cooldown expired, replace operation succeeded: $replaced")
+        logger.debug("Cooldown expired, replace operation succeeded: $replaced")
         return replaced
     }
 
-    log.debug("Raid blocked by cooldown: ${cooldownDuration - timeDiff}ms remaining")
+    logger.debug("Raid blocked by cooldown: ${cooldownDuration - timeDiff}ms remaining")
     return false
 }
 
@@ -135,18 +135,18 @@ fun main() {
                 val raidReport = call.receive<RaidReport>()
                 val raidImg = raids[raidReport.raidType] ?: run {
                     call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
-                    log.error("Unknown raid type: ${raidReport.raidType}")
+                    logger.error("Unknown raid type: ${raidReport.raidType}")
                     return@post
                 }
 
                 if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
-                    log.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
+                    logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
                     return@post
                 }
 
                 if (!shouldProcess(raidReport)) {
-                    log.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
+                    logger.error("Raid message from ${raidReport.reporterUuid} ignored due to cooldown")
                     call.respond(HttpStatusCode.TooManyRequests, "Raid message ignored due to cooldown")
                     return@post
                 }
@@ -161,10 +161,10 @@ fun main() {
                 )
                 if (!response.status.isSuccess()) {
                     call.respond(HttpStatusCode.InternalServerError, "Failed to send raid message")
-                    log.error("Failed to send raid message: ${response.status}")
+                    logger.error("Failed to send raid message: ${response.status}")
                     return@post
                 }
-                log.info(
+                logger.info(
                     "Processed raid completion reported by ${raidReport.reporterUuid} " +
                             "for '${raidReport.raidType}' with players: ${raidReport.players}"
                 )
