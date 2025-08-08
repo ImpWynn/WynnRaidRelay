@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -91,17 +92,25 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
 
 suspend fun updateGuild() {
     val guild = System.getenv("GUILD")
-    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
+    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild")
     if (response.status.isSuccess()) {
         val jsonResponse = response.body<String>()
         val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
         val members = parsedJson["members"]!!.jsonObject
-        guildMembers.clear()
-        // first key is "total", skip
+        val updatedMembers = mutableListOf<String>()
+
         for (rank in members.keys.drop(1)) {
-            guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
+            val rankObject = members[rank]?.jsonObject ?: continue
+            val uuids = rankObject.values.mapNotNull { playerElement ->
+                playerElement.jsonObject["uuid"]?.jsonPrimitive?.content
+            }
+
+            updatedMembers.addAll(uuids)
         }
+
+        guildMembers.clear()
+        guildMembers.addAll(updatedMembers)
         lastGuildUpdate = System.currentTimeMillis()
     } else {
         throw IllegalStateException("Failed to update guild members for guild '$guild'")
