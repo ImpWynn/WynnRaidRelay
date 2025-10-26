@@ -48,7 +48,6 @@ data class RaidReport(
 ) {
     override fun hashCode(): Int {
         val hash = 31 * raidType.hashCode() + players.hashCode()
-        logger.debug("Generated hash for raid '{}' with players {}: {}", raidType, players, hash)
         return hash
     }
 
@@ -68,18 +67,14 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
     val raidKey = raidReport.hashCode()
 
     logger.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
-    logger.debug("Current cooldowns map state: {}", cooldowns.toMap())
 
     val previous = cooldowns.putIfAbsent(raidKey, now)
-    logger.debug("putIfAbsent for key $raidKey returned previous value: $previous")
 
     if (previous == null) {
-        logger.debug("No previous timestamp found, allowing raid")
         return true
     }
 
     val timeDiff = now - previous
-    logger.debug("Time difference: ${timeDiff}ms (cooldown: ${cooldownDuration}ms)")
 
     if (timeDiff > cooldownDuration) {
         val replaced = cooldowns.replace(raidKey, previous, now)
