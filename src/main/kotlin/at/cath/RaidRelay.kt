@@ -43,7 +43,9 @@ private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
 data class RaidReport(
     val raidType: String,
     val players: List<String>,
-    val reporterUuid: String
+    val reporterUuid: String,
+    val gxpGained: String,
+    val srGained: Int,
 ) {
     override fun hashCode(): Int {
         val hash = 31 * raidType.hashCode() + players.hashCode()
@@ -163,8 +165,7 @@ fun main() {
                 val response = sendDiscordWebhook(
                     webhookUrl,
                     raidMsg(
-                        raidReport.raidType,
-                        raidReport.players,
+                        raidReport,
                         raidImg
                     )
                 )
@@ -198,23 +199,23 @@ private fun escapeMarkdown(text: String): String {
     return text.replace(Regex("([\\\\_*~`>|])")) { "\\\\${it.value}" }
 }
 
-private fun raidMsg(raidName: String, players: List<String>, raidImgUrl: String): String {
+private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
     return """
         {
             "content": null,
             "embeds": [
                 {
-                    "title": "Completion: ${escapeMarkdown(raidName)}",
+                    "title": "Completion: ${escapeMarkdown(raidObj.raidType)}",
                     "color": null,
                     "fields": [
                         {
                             "name": "Player 1",
-                            "value": "${escapeMarkdown(players.getOrElse(0) { "N/A" })}",
+                            "value": "${escapeMarkdown(raidObj.players.getOrElse(0) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 2",
-                            "value": "${escapeMarkdown(players.getOrElse(1) { "N/A" })}",
+                            "value": "${escapeMarkdown(raidObj.players.getOrElse(1) { "N/A" })}",
                             "inline": true
                         },
                         {
@@ -223,17 +224,21 @@ private fun raidMsg(raidName: String, players: List<String>, raidImgUrl: String)
                         },
                         {
                             "name": "Player 3",
-                            "value": "${escapeMarkdown(players.getOrElse(2) { "N/A" })}",
+                            "value": "${escapeMarkdown(raidObj.players.getOrElse(2) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 4",
-                            "value": "${escapeMarkdown(players.getOrElse(3) { "N/A" })}",
+                            "value": "${escapeMarkdown(raidObj.players.getOrElse(3) { "N/A" })}",
                             "inline": true
                         }
                     ],
+                    "footer": {
+                            "text": "+${raidObj.srGained} SR, +${raidObj.gxpGained} GXP",
+                            "icon_url": "https://wynncraft.wiki.gg/images/RaidSigil2.png"
+                    },
                     "author": {
-                        "name": "Guild Raid Notification",
+                        "name": "Guild Raid Notification (+ ${raidObj.srGained}SR)",
                         "icon_url": "https://i.imgur.com/PTI0zxK.png"
                     },
                     "thumbnail": {
