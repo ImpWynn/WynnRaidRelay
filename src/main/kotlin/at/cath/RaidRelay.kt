@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +33,7 @@ private val raids = mapOf(
 
 @Volatile
 private var lastGuildUpdate = 0L
-private val guildMembers = mutableSetOf<String>()
+private val guildMembers = mutableMapOf<String, String>()
 
 private val guildUpdateLock = Mutex()
 
@@ -97,7 +98,13 @@ suspend fun updateGuild() {
         guildMembers.clear()
         // first key is "total", skip
         for (rank in members.keys.drop(1)) {
-            guildMembers.addAll(members[rank]?.jsonObject?.keys.orEmpty())
+            val rankObject = members[rank]?.jsonObject ?: continue
+            val playerNames = rankObject.values.mapNotNull { playerElement ->
+                playerElement.jsonObject["username"]?.jsonPrimitive?.content
+            }
+            val uuids = rankObject.keys
+
+            guildMembers.putAll(uuids.zip(playerNames))
         }
         lastGuildUpdate = System.currentTimeMillis()
     } else {
@@ -105,12 +112,15 @@ suspend fun updateGuild() {
     }
 }
 
-suspend fun isInGuild(uuid: String): Boolean {
+suspend fun isInGuild(identifier: String): Boolean {
     try {
         guildUpdateLock.lock()
-        if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
+        if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10)) {
             updateGuild()
-        return uuid in guildMembers
+        }
+
+        return (identifier in guildMembers) || guildMembers.containsValue(identifier)
+
     } finally {
         guildUpdateLock.unlock()
     }
@@ -136,6 +146,22 @@ fun main() {
                     return@post
                 }
 
+                val guildPlayers =
+                    raidReport.players.toMutableSet().apply { add(raidReport.reporterUuid) }.filter { !isInGuild(it) }
+                if (guildPlayers.isNotEmpty()) {
+                    call.respond(
+                        HttpStatusCode.Forbidden,
+                        "Unauthorized players in raid report: ${guildPlayers.joinToString(", ")}"
+                    )
+                    logger.error(
+                        "Unauthorized players in raid report from ${raidReport.reporterUuid}: ${
+                            guildPlayers.joinToString(
+                                ", "
+                            )
+                        }"
+                    )
+                    return@post
+                }
                 if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
