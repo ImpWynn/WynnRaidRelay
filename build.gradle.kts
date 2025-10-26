@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.0.0"
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.0.0"
+    kotlin("jvm") version "2.2.0"
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.2.0"
 }
 
 group = "at.cath"
@@ -37,8 +37,4 @@ tasks.create("buildFatJar", Jar::class) {
         configurations.runtimeClasspath.get().filter { it.name.endsWith("jar") }.map { zipTree(it) }
     })
     with(tasks.jar.get())
-}
-
-kotlin {
-    jvmToolchain(21) // Ensure compatibility with your environment
 }
