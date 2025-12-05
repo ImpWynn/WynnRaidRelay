@@ -21,19 +21,26 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.encodeToString
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
+
+data class RaidInfo(val id: Int, val imageUrl: String)
+
 private val raids = mapOf(
-    "The Canyon Colossus" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png",
-    "The Nameless Anomaly" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png",
-    "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
-    "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
+    "The Canyon Colossus" to RaidInfo(1, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png"),
+    "The Nameless Anomaly" to RaidInfo(2, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png"),
+    "Orphion's Nexus of Light" to RaidInfo(3, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png"),
+    "Nest of the Grootslangs" to RaidInfo(4, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png")
 )
 
 @Volatile
 private var lastGuildUpdate = 0L
-private val guildMembers = mutableMapOf<String, String>()
+private val guildMembers = mutableSetOf<String>()
 
 private val guildUpdateLock = Mutex()
 
@@ -43,12 +50,11 @@ private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
 data class RaidReport(
     val raidType: String,
     val players: List<String>,
-    val reporterUuid: String,
-    val gxpGained: String,
-    val srGained: Int,
+    val reporterUuid: String
 ) {
     override fun hashCode(): Int {
         val hash = 31 * raidType.hashCode() + players.hashCode()
+        logger.debug("Generated hash for raid '{}' with players {}: {}", raidType, players, hash)
         return hash
     }
 
@@ -68,14 +74,18 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
     val raidKey = raidReport.hashCode()
 
     logger.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
+    logger.debug("Current cooldowns map state: {}", cooldowns.toMap())
 
     val previous = cooldowns.putIfAbsent(raidKey, now)
+    logger.debug("putIfAbsent for key $raidKey returned previous value: $previous")
 
     if (previous == null) {
+        logger.debug("No previous timestamp found, allowing raid")
         return true
     }
 
     val timeDiff = now - previous
+    logger.debug("Time difference: ${timeDiff}ms (cooldown: ${cooldownDuration}ms)")
 
     if (timeDiff > cooldownDuration) {
         val replaced = cooldowns.replace(raidKey, previous, now)
@@ -89,38 +99,36 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
 
 suspend fun updateGuild() {
     val guild = System.getenv("GUILD")
-    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
+    val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild")
     if (response.status.isSuccess()) {
         val jsonResponse = response.body<String>()
         val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
 
         val members = parsedJson["members"]!!.jsonObject
-        guildMembers.clear()
-        // first key is "total", skip
+        val updatedMembers = mutableListOf<String>()
+
         for (rank in members.keys.drop(1)) {
             val rankObject = members[rank]?.jsonObject ?: continue
-            val playerNames = rankObject.values.mapNotNull { playerElement ->
-                playerElement.jsonObject["username"]?.jsonPrimitive?.content
+            val uuids = rankObject.values.mapNotNull { playerElement ->
+                playerElement.jsonObject["uuid"]?.jsonPrimitive?.content
             }
-            val uuids = rankObject.keys
-
-            guildMembers.putAll(uuids.zip(playerNames))
+            updatedMembers.addAll(uuids)
         }
+
+        guildMembers.clear()
+        guildMembers.addAll(updatedMembers)
         lastGuildUpdate = System.currentTimeMillis()
     } else {
         throw IllegalStateException("Failed to update guild members for guild '$guild'")
     }
 }
 
-suspend fun isInGuild(identifier: String): Boolean {
+suspend fun isInGuild(uuid: String): Boolean {
     try {
         guildUpdateLock.lock()
-        if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10)) {
+        if (System.currentTimeMillis() - lastGuildUpdate > TimeUnit.MINUTES.toMillis(10))
             updateGuild()
-        }
-
-        return (identifier in guildMembers) || guildMembers.containsValue(identifier)
-
+        return uuid in guildMembers
     } finally {
         guildUpdateLock.unlock()
     }
@@ -140,28 +148,12 @@ fun main() {
         routing {
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
-                val raidImg = raids[raidReport.raidType] ?: run {
+                val raidInfo = raids[raidReport.raidType] ?: run {
                     call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
                     logger.error("Unknown raid type: ${raidReport.raidType}")
                     return@post
                 }
 
-                val guildPlayers =
-                    raidReport.players.toMutableSet().apply { add(raidReport.reporterUuid) }.filter { !isInGuild(it) }
-                if (guildPlayers.isNotEmpty()) {
-                    call.respond(
-                        HttpStatusCode.Forbidden,
-                        "Unauthorized players in raid report: ${guildPlayers.joinToString(", ")}"
-                    )
-                    logger.error(
-                        "Unauthorized players in raid report from ${raidReport.reporterUuid}: ${
-                            guildPlayers.joinToString(
-                                ", "
-                            )
-                        }"
-                    )
-                    return@post
-                }
                 if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
@@ -174,11 +166,33 @@ fun main() {
                     return@post
                 }
 
+                val impWebsiteUrl: String? = System.getenv("IMPERIAL_WEBSITE_URL")
+                if (impWebsiteUrl != null) {
+                    try {
+                        val websiteResponse = sendRaidToWebsite(
+                            impWebsiteUrl,
+                            websitePut(raidReport.raidType, raidReport.players)
+                        )
+                        logger.info(websiteResponse.body<String?>().toString())
+
+                        if (!websiteResponse.status.isSuccess()) {
+                            logger.error("Failed to send raid to website: ${websiteResponse.status}")
+                        }
+                        logger.info(
+                            "Processed website raid completion reported by ${raidReport.reporterUuid} " +
+                                    "for '${raidReport.raidType}' with players: ${raidReport.players}"
+                        )
+                    } catch(ex: Exception) {
+                        logger.error("Error sending raid to website", ex)
+                    }
+                }
+
                 val response = sendDiscordWebhook(
                     webhookUrl,
                     raidMsg(
-                        raidReport,
-                        raidImg
+                        raidReport.raidType,
+                        raidReport.players,
+                        raidInfo.imageUrl
                     )
                 )
                 if (!response.status.isSuccess()) {
@@ -207,27 +221,39 @@ suspend fun sendDiscordWebhook(webhookUrl: String, message: String): HttpRespons
     }
 }
 
+suspend fun sendRaidToWebsite (websiteURL: String, message: String): HttpResponse {
+    return try {
+        client.put(websiteURL){
+            contentType(ContentType.Application.Json)
+            setBody(message)
+        }
+
+    } catch (e: Exception) {
+        throw e
+    }
+}
+
 private fun escapeMarkdown(text: String): String {
     return text.replace(Regex("([\\\\_*~`>|])")) { "\\\\${it.value}" }
 }
 
-private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
+private fun raidMsg(raidName: String, players: List<String>, raidImgUrl: String): String {
     return """
         {
             "content": null,
             "embeds": [
                 {
-                    "title": "Completion: ${escapeMarkdown(raidObj.raidType)}",
+                    "title": "Completion: ${escapeMarkdown(raidName)}",
                     "color": null,
                     "fields": [
                         {
                             "name": "Player 1",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(0) { "N/A" })}",
+                            "value": "${escapeMarkdown(players.getOrElse(0) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 2",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(1) { "N/A" })}",
+                            "value": "${escapeMarkdown(players.getOrElse(1) { "N/A" })}",
                             "inline": true
                         },
                         {
@@ -236,21 +262,17 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
                         },
                         {
                             "name": "Player 3",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(2) { "N/A" })}",
+                            "value": "${escapeMarkdown(players.getOrElse(2) { "N/A" })}",
                             "inline": true
                         },
                         {
                             "name": "Player 4",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(3) { "N/A" })}",
+                            "value": "${escapeMarkdown(players.getOrElse(3) { "N/A" })}",
                             "inline": true
                         }
                     ],
-                    "footer": {
-                            "text": "+${raidObj.srGained} SR, +${raidObj.gxpGained} GXP",
-                            "icon_url": "https://wynncraft.wiki.gg/images/RaidSigil2.png"
-                    },
                     "author": {
-                        "name": "Guild Raid Notification (+ ${raidObj.srGained}SR)",
+                        "name": "Guild Raid Notification",
                         "icon_url": "https://i.imgur.com/PTI0zxK.png"
                     },
                     "thumbnail": {
@@ -262,3 +284,19 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
         }
     """
 }
+
+private fun websitePut(raidName: String, players: List<String>): String {
+    val raidInfo = raids[raidName] ?: throw IllegalArgumentException("Unknown raid: $raidName")
+    val usernamesJson = Json.encodeToString<List<String>>(players)
+    val completedDate = Instant.now().atOffset(ZoneOffset.UTC)
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
+    logger.debug(raidInfo.id.toString(), usernamesJson, completedDate)
+    return """
+        {
+        "raidId": ${raidInfo.id},
+        "completedDate": "$completedDate",
+        "minecraftUsernames": $usernamesJson
+        }
+    """
+}
+
