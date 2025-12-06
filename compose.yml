@@ -4,6 +4,7 @@ services:
     ports:
       - "61000:8080"
     environment:
-      - GUILD
-      - DISCORD_WEBHOOK_URL
+      GUILD: ${GUILD}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      IMPERIAL_WEBSITE_URL: ${IMPERIAL_WEBSITE_URL:-}
     restart: unless-stopped

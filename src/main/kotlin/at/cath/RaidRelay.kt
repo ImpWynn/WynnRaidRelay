@@ -180,7 +180,10 @@ fun main() {
                     return@post
                 }
 
-                val impWebsiteUrl: String? = System.getenv("IMPERIAL_WEBSITE_URL")
+                val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
+                    ?.takeIf { it.isNotBlank() }
+
+                logger.info("IMP WEBSITE URL: {}", impWebsiteUrl)
                 if (impWebsiteUrl != null) {
                     try {
                         val websiteResponse = sendRaidToWebsite(
