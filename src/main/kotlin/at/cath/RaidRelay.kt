@@ -186,7 +186,7 @@ fun main() {
                     return@post
                 }
 
-                // Website Sync (optional)
+                // Website sync is optional — if the URL is missing or blank, skip silently.
                 val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
                     ?.takeIf { it.isNotBlank() }
 
@@ -307,7 +307,7 @@ private fun createWebsitePayload(raidName: String, players: List<String>): Strin
 
     val completedDate = Instant.now().toString()
 
-    logger.info("Sending website payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
+    logger.debug("Sending website payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
 
     return Json.encodeToString(
         WebsiteRaidPayload(
