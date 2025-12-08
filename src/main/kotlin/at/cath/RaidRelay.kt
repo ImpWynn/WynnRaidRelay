@@ -190,7 +190,6 @@ fun main() {
                 val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
                     ?.takeIf { it.isNotBlank() }
 
-                logger.info("IMP WEBSITE URL: {}", impWebsiteUrl) // remove before prod
                 val impWebsiteError = tryWebsiteSync(impWebsiteUrl, raidReport)
 
                 val response = sendDiscordWebhook(
