@@ -22,8 +22,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
@@ -34,6 +32,13 @@ private val raids = mapOf(
     "The Nameless Anomaly" to RaidInfo(2, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png"),
     "Orphion's Nexus of Light" to RaidInfo(3, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png"),
     "Nest of the Grootslangs" to RaidInfo(4, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png")
+)
+
+@Serializable
+data class WebsiteRaidPayload(
+    val raidId: Int,
+    val completedDate: String,
+    val minecraftUsernames: List<String>
 )
 
 @Volatile
@@ -142,6 +147,7 @@ fun main() {
         }
         routing {
             post("/raid") {
+                // Raid type check
                 val raidReport = call.receive<RaidReport>()
                 val raidImg = raids[raidReport.raidType] ?: run {
                     call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
@@ -149,6 +155,7 @@ fun main() {
                     return@post
                 }
 
+                // Guild check
                 val guildPlayers =
                     raidReport.players.toMutableSet().apply { add(raidReport.reporterUuid) }.filter { !isInGuild(it) }
                 if (guildPlayers.isNotEmpty()) {
@@ -165,6 +172,8 @@ fun main() {
                     )
                     return@post
                 }
+
+                // Cooldown check
                 if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
@@ -177,30 +186,12 @@ fun main() {
                     return@post
                 }
 
+                // Website Sync (optional)
                 val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
                     ?.takeIf { it.isNotBlank() }
 
-                logger.info("IMP WEBSITE URL: {}", impWebsiteUrl)
-                if (impWebsiteUrl != null) {
-                    try {
-                        val websiteResponse = sendRaidToWebsite(
-                            impWebsiteUrl,
-                            websitePut(raidReport.raidType, raidReport.players)
-                        )
-                        logger.info(websiteResponse.body<String?>().toString())
-
-                        if (!websiteResponse.status.isSuccess()) {
-                            logger.error("Failed to send raid to website: ${websiteResponse.status}")
-                        }
-
-                        logger.info(
-                            "Processed website raid completion reported by ${raidReport.reporterUuid} " +
-                                    "for '${raidReport.raidType}' with players: ${raidReport.players}"
-                        )
-                    } catch(ex: Exception) {
-                        logger.error("Error sending raid to website", ex)
-                    }
-                }
+                logger.info("IMP WEBSITE URL: {}", impWebsiteUrl) // remove before prod
+                val impWebsiteError = tryWebsiteSync(impWebsiteUrl, raidReport)
 
                 val response = sendDiscordWebhook(
                     webhookUrl,
@@ -210,15 +201,23 @@ fun main() {
                     )
                 )
                 if (!response.status.isSuccess()) {
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to send raid message")
-                    logger.error("Failed to send raid message: ${response.status}")
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to send discord raid message")
+                    logger.error("Failed to send discord raid message: ${response.status}")
                     return@post
                 }
+
                 logger.info(
-                    "Processed raid completion reported by ${raidReport.reporterUuid} " +
+                    "Processed discord raid completion reported by ${raidReport.reporterUuid} " +
                             "for '${raidReport.raidType}' with players: ${raidReport.players}"
                 )
-                call.respond(HttpStatusCode.OK, "Raid message processed")
+
+                // Final response
+                val resultMessage = if (impWebsiteError != null)
+                    "Raid processed, but website sync failed: $impWebsiteError"
+                else
+                    "Raid message processed successfully"
+
+                call.respond(HttpStatusCode.OK, resultMessage)
             }
         }
     }.start(wait = true)
@@ -302,20 +301,45 @@ suspend fun sendRaidToWebsite (websiteURL: String, message: String): HttpRespons
     }
 }
 
-private fun websitePut(raidName: String, players: List<String>): String {
-    val raidInfo = raids[raidName] ?: throw IllegalArgumentException("Unknown raid: $raidName")
-    val usernamesJson = Json.encodeToString<List<String>>(players)
-    val completedDate = Instant.now().atOffset(ZoneOffset.UTC)
-        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
-    logger.debug(raidInfo.toString(), usernamesJson, completedDate)
-    logger.debug("${raidInfo.id} $usernamesJson $completedDate")
 
-    return """
-        {
-        "raidId": ${raidInfo.id},
-        "completedDate": "$completedDate",
-        "minecraftUsernames": $usernamesJson
-        }
-    """
+private fun createWebsitePayload(raidName: String, players: List<String>): String {
+    val raidInfo = raids[raidName]
+        ?: throw IllegalArgumentException("Unknown raid: $raidName")
+
+    val completedDate = Instant.now().toString()
+
+    logger.info("Sending website payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
+
+    return Json.encodeToString(
+        WebsiteRaidPayload(
+            raidId = raidInfo.id,
+            completedDate = completedDate,
+            minecraftUsernames = players
+        )
+    )
+}
+
+private suspend fun tryWebsiteSync(
+    url: String?,
+    raidReport: RaidReport
+): String? {
+    if (url.isNullOrBlank()) return null
+
+    return try {
+        val response = sendRaidToWebsite(
+            url,
+            createWebsitePayload(raidReport.raidType, raidReport.players)
+        )
+
+        if (!response.status.isSuccess()) {
+            val msg = "Website sync failed: ${response.status}"
+            logger.warn(msg)
+            msg
+        } else null
+    } catch (ex: Exception) {
+        val msg = "Website sync error: ${ex.message}"
+        logger.error(msg, ex)
+        msg
+    }
 }
 
