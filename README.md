@@ -14,8 +14,7 @@ Your `.env` should look like:
 ```
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx
 GUILD=Imperial
-IMPERIAL_WEBSITE_URL=https://mywebsite.com/api/raids   # optional
-```
+IMPERIAL_WEBSITE_URL=https://imperialwebsite.com/api/raidscompleted/raid-bot-report # optional
 
 ### 3. Run with Docker:
 ``` bash

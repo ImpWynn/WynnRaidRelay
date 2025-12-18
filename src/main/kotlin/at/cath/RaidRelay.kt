@@ -291,7 +291,7 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
 
 suspend fun sendRaidToWebsite (websiteURL: String, message: String): HttpResponse {
     return try {
-        client.put(websiteURL){
+        client.post(websiteURL){
             contentType(ContentType.Application.Json)
             setBody(message)
         }
