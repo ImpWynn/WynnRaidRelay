@@ -8,7 +8,7 @@ If configured, it can also sync raid data to an external website API.
 ```
 cp .env.example .env
 ```
-### 2. Fill in your values inside `.env`.
+### 2. Fill in your values inside `.env`:
 Your `.env` should look like:
 
 ```
