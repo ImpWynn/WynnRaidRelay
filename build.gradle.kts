@@ -20,6 +20,8 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:${property("ktor_version")}")
     implementation("io.ktor:ktor-serialization-kotlinx-json:${property("ktor_version")}")
     implementation("ch.qos.logback:logback-classic:${property("logback_version")}")
+    implementation("com.rabbitmq:amqp-client:5.22.0")
+
 }
 
 tasks.test {

@@ -21,23 +21,36 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.time.Instant
+import com.rabbitmq.client.AMQP
+import com.rabbitmq.client.ConnectionFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
+
+data class RaidInfo(val id: Int, val imageUrl: String)
 private val raids = mapOf(
-    "The Canyon Colossus" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png",
-    "The Nameless Anomaly" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png",
-    "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
-    "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
+    "The Canyon Colossus" to RaidInfo(1, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png"),
+    "The Nameless Anomaly" to RaidInfo(2, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png"),
+    "Orphion's Nexus of Light" to RaidInfo(3, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png"),
+    "Nest of the Grootslangs" to RaidInfo(4, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png")
+)
+
+@Serializable
+data class WebsiteRaidPayload(
+    val raidId: Int,
+    val completedDate: String,
+    val minecraftUsernames: List<String>
 )
 
 @Volatile
 private var lastGuildUpdate = 0L
 private val guildMembers = mutableMapOf<String, String>()
-
 private val guildUpdateLock = Mutex()
-
 private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
+private val jsonConfig = Json { encodeDefaults = true }
 
 @Serializable
 data class RaidReport(
@@ -46,7 +59,8 @@ data class RaidReport(
     val reporterUuid: String,
     val gxpGained: String,
     val srGained: Int,
-) {
+)
+{
     override fun hashCode(): Int {
         val hash = 31 * raidType.hashCode() + players.hashCode()
         return hash
@@ -69,11 +83,7 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
 
     logger.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
 
-    val previous = cooldowns.putIfAbsent(raidKey, now)
-
-    if (previous == null) {
-        return true
-    }
+    val previous = cooldowns.putIfAbsent(raidKey, now) ?: return true
 
     val timeDiff = now - previous
 
@@ -90,6 +100,7 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
 suspend fun updateGuild() {
     val guild = System.getenv("GUILD")
     val response: HttpResponse = client.get("https://api.wynncraft.com/v3/guild/$guild?identifier=uuid")
+
     if (response.status.isSuccess()) {
         val jsonResponse = response.body<String>()
         val parsedJson = Json.parseToJsonElement(jsonResponse).jsonObject
@@ -132,13 +143,14 @@ fun main() {
     } ?: throw IllegalArgumentException("DISCORD_WEBHOOK_URL is required")
 
     System.getenv("GUILD") ?: throw IllegalArgumentException("GUILD environment variable is required")
+    installShutdownHook()
 
     embeddedServer(Netty, port = 8080) {
-        install(ContentNegotiation) {
-            json(json = Json)
-        }
+        install(ContentNegotiation) { json(jsonConfig) }
+
         routing {
             post("/raid") {
+                // Raid type check
                 val raidReport = call.receive<RaidReport>()
                 val raidImg = raids[raidReport.raidType] ?: run {
                     call.respond(HttpStatusCode.BadRequest, "Unknown raid type")
@@ -146,6 +158,7 @@ fun main() {
                     return@post
                 }
 
+                // Guild check
                 val guildPlayers =
                     raidReport.players.toMutableSet().apply { add(raidReport.reporterUuid) }.filter { !isInGuild(it) }
                 if (guildPlayers.isNotEmpty()) {
@@ -162,6 +175,8 @@ fun main() {
                     )
                     return@post
                 }
+
+                // Cooldown check
                 if (!isInGuild(raidReport.reporterUuid)) {
                     call.respond(HttpStatusCode.Forbidden, "Unauthorized")
                     logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
@@ -174,23 +189,33 @@ fun main() {
                     return@post
                 }
 
+                val rabbitError = tryRabbitPublish(raidReport)
+
                 val response = sendDiscordWebhook(
                     webhookUrl,
                     raidMsg(
                         raidReport,
-                        raidImg
+                        raidImg.imageUrl
                     )
                 )
                 if (!response.status.isSuccess()) {
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to send raid message")
-                    logger.error("Failed to send raid message: ${response.status}")
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to send discord raid message")
+                    logger.error("Failed to send discord raid message: ${response.status}")
                     return@post
                 }
+
                 logger.info(
-                    "Processed raid completion reported by ${raidReport.reporterUuid} " +
+                    "Processed discord raid completion reported by ${raidReport.reporterUuid} " +
                             "for '${raidReport.raidType}' with players: ${raidReport.players}"
                 )
-                call.respond(HttpStatusCode.OK, "Raid message processed")
+
+                // Final response
+                val resultMessage =
+                    if (rabbitError != null) "Raid processed, but RabbitMQ publish failed: $rabbitError"
+                    else "Raid messages processed successfully"
+
+
+                call.respond(HttpStatusCode.OK, resultMessage)
             }
         }
     }.start(wait = true)
@@ -261,4 +286,100 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
             "attachments": []
         }
     """
+}
+
+private fun createRabbitMQPayload(raidName: String, players: List<String>): String {
+    val raidInfo = raids[raidName]
+        ?: throw IllegalArgumentException("Unknown raid: $raidName")
+
+    val completedDate = Instant.now().toString()
+
+    logger.debug("Publishing rabbit payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
+
+    return jsonConfig.encodeToString(
+        WebsiteRaidPayload(
+            raidId = raidInfo.id,
+            completedDate = completedDate,
+            minecraftUsernames = players
+        )
+    )
+}
+
+private const val EXCHANGE_NAME = "raids.exchange"
+private const val ROUTING_KEY = "raid.completed"
+
+private fun env(name: String): String? =
+    System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() }
+
+private fun envRequired(name: String): String =
+    env(name) ?: error("$name is not set (required).")
+
+@Suppress("SameParameterValue")
+private fun envRequiredInt(name: String): Int {
+    val raw = envRequired(name)
+    return raw.toIntOrNull()
+        ?: error("$name must be an integer (got '$raw').")
+}
+
+private fun rabbitFactory(): ConnectionFactory {
+    val host = envRequired("RABBIT_HOST")
+    val port = envRequiredInt("RABBIT_PORT")
+    val user = envRequired("RABBIT_USER")
+    val pass = envRequired("RABBIT_PASS")
+    val vhost = envRequired("RABBIT_VHOST")
+
+    return ConnectionFactory().apply {
+        this.host = host
+        this.port = port
+        username = user
+        password = pass
+        virtualHost = vhost
+        requestedHeartbeat = 30
+        connectionTimeout = 10_000
+        isAutomaticRecoveryEnabled = true
+        networkRecoveryInterval = 5_000
+    }
+}
+
+private val rabbitConn by lazy {
+    rabbitFactory().newConnection("raid-relay")
+}
+
+private fun publishRaidCompleted(payloadJson: String) {
+    rabbitConn.createChannel().use { ch ->
+        ch.confirmSelect()
+
+        val props = AMQP.BasicProperties.Builder()
+            .contentType("application/json")
+            .deliveryMode(2) // persistent
+            .build()
+
+        ch.basicPublish(
+            EXCHANGE_NAME,
+            ROUTING_KEY,
+            props,
+            payloadJson.toByteArray(Charsets.UTF_8)
+        )
+
+        // Wait for broker confirm (throws if nack / timeout)
+        ch.waitForConfirmsOrDie(5_000)
+    }
+}
+
+private suspend fun tryRabbitPublish(raidReport: RaidReport): String? {
+    return try {
+        val payload = createRabbitMQPayload(raidReport.raidType, raidReport.players)
+        withContext(Dispatchers.IO) { publishRaidCompleted(payload) }
+        null
+    } catch (ex: Exception) {
+        val msg = "Rabbit publish error: ${ex.message}"
+        logger.error(msg, ex)
+        msg
+    }
+}
+
+private fun installShutdownHook() {
+    Runtime.getRuntime().addShutdownHook(Thread {
+        try { rabbitConn.close() } catch (_: Exception) {}
+    })
 }

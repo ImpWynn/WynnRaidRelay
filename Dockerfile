@@ -8,7 +8,7 @@ COPY src ./src
 
 RUN gradle buildFatJar --no-daemon
 
-FROM openjdk:21-slim
+FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
