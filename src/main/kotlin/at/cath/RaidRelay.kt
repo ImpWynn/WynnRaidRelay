@@ -23,9 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.time.Instant
 import com.rabbitmq.client.AMQP
-import com.rabbitmq.client.BuiltinExchangeType
 import com.rabbitmq.client.ConnectionFactory
-import com.rabbitmq.client.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -195,9 +193,6 @@ fun main() {
                     return@post
                 }
 
-                // Website sync is optional — if the URL is missing or blank, skip silently.
-                val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
-                    ?.takeIf { it.isNotBlank() }
 
                 val rabbitError = tryRabbitPublish(raidReport)
 
@@ -298,18 +293,6 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
     """
 }
 
-suspend fun sendRaidToWebsite (websiteURL: String, message: String): HttpResponse {
-    return try {
-        client.post(websiteURL){
-            contentType(ContentType.Application.Json)
-            setBody(message)
-        }
-    } catch (e: Exception) {
-        throw e
-    }
-}
-
-
 private fun createRabbitMQPayload(raidName: String, players: List<String>): String {
     val raidInfo = raids[raidName]
         ?: throw IllegalArgumentException("Unknown raid: $raidName")
@@ -330,12 +313,16 @@ private fun createRabbitMQPayload(raidName: String, players: List<String>): Stri
 private const val EXCHANGE_NAME = "raids.exchange"
 private const val ROUTING_KEY = "raid.completed"
 
+private fun env(name: String): String? =
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+
+
 private fun rabbitFactory(): ConnectionFactory {
-    val host = System.getenv("RABBIT_HOST") ?: "raid-rabbit"
-    val port = (System.getenv("RABBIT_PORT") ?: "5672").toInt()
-    val user = System.getenv("RABBIT_USER") ?: "imperial"
-    val pass = System.getenv("RABBIT_PASS") ?: "ImperialGuild"
-    val vhost = System.getenv("RABBIT_VHOST") ?: "imperial"
+    val host = env("RABBIT_HOST") ?: "raid-rabbit"
+    val port = (env("RABBIT_PORT") ?: "5672").toInt()
+    val user = env("RABBIT_USER") ?: "imperial"
+    val pass = env("RABBIT_PASS") ?: "ImperialGuild"
+    val vhost = env("RABBIT_VHOST") ?: "imperial"
 
     return ConnectionFactory().apply {
         this.host = host
@@ -356,12 +343,13 @@ private val rabbitConn by lazy {
 
 private fun publishRaidCompleted(payloadJson: String) {
     rabbitConn.createChannel().use { ch ->
-        ch.exchangeDeclare(EXCHANGE_NAME, BuiltinExchangeType.TOPIC, true)
+        // Enable publisher confirms BEFORE publishing
         ch.confirmSelect()
+
 
         val props = AMQP.BasicProperties.Builder()
             .contentType("application/json")
-            .deliveryMode(2)
+            .deliveryMode(2) // persistent
             .build()
 
         ch.basicPublish(
@@ -371,9 +359,11 @@ private fun publishRaidCompleted(payloadJson: String) {
             payloadJson.toByteArray(Charsets.UTF_8)
         )
 
+        // Wait for broker confirm (throws if nack / timeout)
         ch.waitForConfirmsOrDie(5_000)
     }
 }
+
 
 private fun installShutdownHook() {
     Runtime.getRuntime().addShutdownHook(Thread {

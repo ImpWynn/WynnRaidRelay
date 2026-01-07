@@ -9,8 +9,8 @@ services:
       IMPERIAL_WEBSITE_URL: ${IMPERIAL_WEBSITE_URL:-}
       RABBIT_HOST: ${RABBIT_HOST:-raid-rabbit}
       RABBIT_PORT: ${RABBIT_PORT:-5672}
-      RABBIT_USER: ${RABBIT_USER:-imperial}
-      RABBIT_PASS: ${RABBIT_PASS:-ImperialGuild}
+      RABBIT_USER: ${RABBIT_USER:-raid-bot}
+      RABBIT_PASS: ${RABBIT_PASS:-RaidBotStrongPassword}
       RABBIT_VHOST: ${RABBIT_VHOST:-imperial}
     restart: unless-stopped
     networks:
