@@ -22,6 +22,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.time.Instant
+import com.rabbitmq.client.AMQP
+import com.rabbitmq.client.BuiltinExchangeType
+import com.rabbitmq.client.ConnectionFactory
+import com.rabbitmq.client.Channel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
 private val client = HttpClient(CIO)
@@ -48,6 +54,9 @@ private val guildMembers = mutableMapOf<String, String>()
 private val guildUpdateLock = Mutex()
 
 private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
+private val jsonConfig = Json { encodeDefaults = true }
+
+
 
 @Serializable
 data class RaidReport(
@@ -140,11 +149,11 @@ fun main() {
     } ?: throw IllegalArgumentException("DISCORD_WEBHOOK_URL is required")
 
     System.getenv("GUILD") ?: throw IllegalArgumentException("GUILD environment variable is required")
+    installShutdownHook()
 
     embeddedServer(Netty, port = 8080) {
-        install(ContentNegotiation) {
-            json(json = Json)
-        }
+        install(ContentNegotiation) { json(jsonConfig) }
+
         routing {
             post("/raid") {
                 // Raid type check
@@ -190,7 +199,7 @@ fun main() {
                 val impWebsiteUrl = System.getenv("IMPERIAL_WEBSITE_URL")
                     ?.takeIf { it.isNotBlank() }
 
-                val impWebsiteError = tryWebsiteSync(impWebsiteUrl, raidReport)
+                val rabbitError = tryRabbitPublish(raidReport)
 
                 val response = sendDiscordWebhook(
                     webhookUrl,
@@ -211,10 +220,10 @@ fun main() {
                 )
 
                 // Final response
-                val resultMessage = if (impWebsiteError != null)
-                    "Raid processed, but website sync failed: $impWebsiteError"
-                else
-                    "Raid message processed successfully"
+                val resultMessage =
+                    if (rabbitError != null) "Raid processed, but RabbitMQ publish failed: $rabbitError"
+                    else "Raid message processed successfully"
+
 
                 call.respond(HttpStatusCode.OK, resultMessage)
             }
@@ -301,15 +310,15 @@ suspend fun sendRaidToWebsite (websiteURL: String, message: String): HttpRespons
 }
 
 
-private fun createWebsitePayload(raidName: String, players: List<String>): String {
+private fun createRabbitMQPayload(raidName: String, players: List<String>): String {
     val raidInfo = raids[raidName]
         ?: throw IllegalArgumentException("Unknown raid: $raidName")
 
     val completedDate = Instant.now().toString()
 
-    logger.debug("Sending website payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
+    logger.debug("Publishing rabbit payload raidId={}, players={}, date={}", raidInfo.id, players, completedDate)
 
-    return Json.encodeToString(
+    return jsonConfig.encodeToString(
         WebsiteRaidPayload(
             raidId = raidInfo.id,
             completedDate = completedDate,
@@ -318,27 +327,70 @@ private fun createWebsitePayload(raidName: String, players: List<String>): Strin
     )
 }
 
-private suspend fun tryWebsiteSync(
-    url: String?,
-    raidReport: RaidReport
-): String? {
-    if (url.isNullOrBlank()) return null
+private const val EXCHANGE_NAME = "raids.exchange"
+private const val ROUTING_KEY = "raid.completed"
 
-    return try {
-        val response = sendRaidToWebsite(
-            url,
-            createWebsitePayload(raidReport.raidType, raidReport.players)
+private fun rabbitFactory(): ConnectionFactory {
+    val host = System.getenv("RABBIT_HOST") ?: "raid-rabbit"
+    val port = (System.getenv("RABBIT_PORT") ?: "5672").toInt()
+    val user = System.getenv("RABBIT_USER") ?: "imperial"
+    val pass = System.getenv("RABBIT_PASS") ?: "ImperialGuild"
+    val vhost = System.getenv("RABBIT_VHOST") ?: "imperial"
+
+    return ConnectionFactory().apply {
+        this.host = host
+        this.port = port
+        username = user
+        password = pass
+        virtualHost = vhost
+        requestedHeartbeat = 30
+        connectionTimeout = 10_000
+        isAutomaticRecoveryEnabled = true
+        networkRecoveryInterval = 5_000
+    }
+}
+
+private val rabbitConn by lazy {
+    rabbitFactory().newConnection("raid-relay")
+}
+
+private fun publishRaidCompleted(payloadJson: String) {
+    rabbitConn.createChannel().use { ch ->
+        ch.exchangeDeclare(EXCHANGE_NAME, BuiltinExchangeType.TOPIC, true)
+        ch.confirmSelect()
+
+        val props = AMQP.BasicProperties.Builder()
+            .contentType("application/json")
+            .deliveryMode(2)
+            .build()
+
+        ch.basicPublish(
+            EXCHANGE_NAME,
+            ROUTING_KEY,
+            props,
+            payloadJson.toByteArray(Charsets.UTF_8)
         )
 
-        if (!response.status.isSuccess()) {
-            val msg = "Website sync failed: ${response.status}"
-            logger.warn(msg)
-            msg
-        } else null
+        ch.waitForConfirmsOrDie(5_000)
+    }
+}
+
+private fun installShutdownHook() {
+    Runtime.getRuntime().addShutdownHook(Thread {
+        try { rabbitConn.close() } catch (_: Exception) {}
+    })
+}
+
+private suspend fun tryRabbitPublish(raidReport: RaidReport): String? {
+    return try {
+        val payload = createRabbitMQPayload(raidReport.raidType, raidReport.players)
+        withContext(Dispatchers.IO) { publishRaidCompleted(payload) }
+        null
     } catch (ex: Exception) {
-        val msg = "Website sync error: ${ex.message}"
+        val msg = "Rabbit publish error: ${ex.message}"
         logger.error(msg, ex)
         msg
     }
 }
+
 
