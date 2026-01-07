@@ -48,13 +48,9 @@ data class WebsiteRaidPayload(
 @Volatile
 private var lastGuildUpdate = 0L
 private val guildMembers = mutableMapOf<String, String>()
-
 private val guildUpdateLock = Mutex()
-
 private val logger = org.slf4j.LoggerFactory.getLogger("RaidProcessor")
 private val jsonConfig = Json { encodeDefaults = true }
-
-
 
 @Serializable
 data class RaidReport(
@@ -193,7 +189,6 @@ fun main() {
                     return@post
                 }
 
-
                 val rabbitError = tryRabbitPublish(raidReport)
 
                 val response = sendDiscordWebhook(
@@ -217,7 +212,7 @@ fun main() {
                 // Final response
                 val resultMessage =
                     if (rabbitError != null) "Raid processed, but RabbitMQ publish failed: $rabbitError"
-                    else "Raid message processed successfully"
+                    else "Raid messages processed successfully"
 
 
                 call.respond(HttpStatusCode.OK, resultMessage)
@@ -314,15 +309,24 @@ private const val EXCHANGE_NAME = "raids.exchange"
 private const val ROUTING_KEY = "raid.completed"
 
 private fun env(name: String): String? =
-    System.getenv(name)?.takeIf { it.isNotBlank() }
+    System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() }
 
+private fun envRequired(name: String): String =
+    env(name) ?: error("$name is not set (required).")
+
+@Suppress("SameParameterValue")
+private fun envRequiredInt(name: String): Int {
+    val raw = envRequired(name)
+    return raw.toIntOrNull()
+        ?: error("$name must be an integer (got '$raw').")
+}
 
 private fun rabbitFactory(): ConnectionFactory {
-    val host = env("RABBIT_HOST") ?: "raid-rabbit"
-    val port = (env("RABBIT_PORT") ?: "5672").toInt()
-    val user = env("RABBIT_USER") ?: "imperial"
-    val pass = env("RABBIT_PASS") ?: "ImperialGuild"
-    val vhost = env("RABBIT_VHOST") ?: "imperial"
+    val host = envRequired("RABBIT_HOST")
+    val port = envRequiredInt("RABBIT_PORT")
+    val user = envRequired("RABBIT_USER")
+    val pass = envRequired("RABBIT_PASS")
+    val vhost = envRequired("RABBIT_VHOST")
 
     return ConnectionFactory().apply {
         this.host = host
@@ -343,9 +347,7 @@ private val rabbitConn by lazy {
 
 private fun publishRaidCompleted(payloadJson: String) {
     rabbitConn.createChannel().use { ch ->
-        // Enable publisher confirms BEFORE publishing
         ch.confirmSelect()
-
 
         val props = AMQP.BasicProperties.Builder()
             .contentType("application/json")
@@ -364,13 +366,6 @@ private fun publishRaidCompleted(payloadJson: String) {
     }
 }
 
-
-private fun installShutdownHook() {
-    Runtime.getRuntime().addShutdownHook(Thread {
-        try { rabbitConn.close() } catch (_: Exception) {}
-    })
-}
-
 private suspend fun tryRabbitPublish(raidReport: RaidReport): String? {
     return try {
         val payload = createRabbitMQPayload(raidReport.raidType, raidReport.players)
@@ -383,4 +378,8 @@ private suspend fun tryRabbitPublish(raidReport: RaidReport): String? {
     }
 }
 
-
+private fun installShutdownHook() {
+    Runtime.getRuntime().addShutdownHook(Thread {
+        try { rabbitConn.close() } catch (_: Exception) {}
+    })
+}

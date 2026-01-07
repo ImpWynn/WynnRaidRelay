@@ -6,12 +6,11 @@ services:
     environment:
       GUILD: ${GUILD}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
-      IMPERIAL_WEBSITE_URL: ${IMPERIAL_WEBSITE_URL:-}
-      RABBIT_HOST: ${RABBIT_HOST:-raid-rabbit}
-      RABBIT_PORT: ${RABBIT_PORT:-5672}
-      RABBIT_USER: ${RABBIT_USER:-raid-bot}
-      RABBIT_PASS: ${RABBIT_PASS:-RaidBotStrongPassword}
-      RABBIT_VHOST: ${RABBIT_VHOST:-imperial}
+      RABBIT_HOST: ${RABBIT_HOST}
+      RABBIT_PORT: ${RABBIT_PORT}
+      RABBIT_USER: ${RABBIT_USER}
+      RABBIT_PASS: ${RABBIT_PASS}
+      RABBIT_VHOST: ${RABBIT_VHOST}
     restart: unless-stopped
     networks:
       - imperial-net

@@ -12,10 +12,16 @@ cp .env.example .env
 Your `.env` should look like:
 
 ```
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx
-GUILD=Imperial
-IMPERIAL_WEBSITE_URL=https://imperialwebsite.com/api/raidscompleted/raid-bot-report # optional
+GUILD=YourGuildName
 
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your/webhook
+
+RABBIT_HOST=rabbit-hostname
+RABBIT_PORT=0000
+RABBIT_USER=rabbit-username
+RABBIT_PASS=rabbit-password
+RABBIT_VHOST=rabbit-vhost
+```
 ### 3. Run with Docker:
 ``` bash
 docker compose up --build
