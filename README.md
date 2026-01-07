@@ -1,6 +1,6 @@
 Simple ktor server for the [Wynn Raid Reporter mod](https://github.com/otcathatsya/wynn-raid-reporter).
 This server accepts POST requests from the mod and relays them to a discord webhook.
-If configured, it can also sync raid data to an external website API.
+It also produces messages to RabbitMQ for processing by a consumer.
 
 ## Setup
 
