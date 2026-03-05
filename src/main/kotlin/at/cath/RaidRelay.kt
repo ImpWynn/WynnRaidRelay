@@ -18,12 +18,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 private val WEBHOOK_PATTERN = "https://(?:[\\w-]+\\.)?discord\\.com/api/webhooks/\\d+/[\\w-]+".toRegex()
-private val client = HttpClient(CIO)
+private val client = HttpClient(CIO) {
+    install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
+        json(Json {
+            ignoreUnknownKeys = true
+        })
+    }
+}
 private val raids = mapOf(
     "The Canyon Colossus" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png",
     "The Nameless Anomaly" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png",
@@ -33,7 +38,7 @@ private val raids = mapOf(
 
 @Volatile
 private var lastGuildUpdate = 0L
-private val guildMembers = mutableMapOf<String, String>()
+private val guildMembers = mutableSetOf<String>()
 
 private val guildUpdateLock = Mutex()
 
@@ -59,9 +64,18 @@ data class RaidReport(
     }
 }
 
+@Serializable
+data class MojangProfile(
+    val id: String,
+    val name: String
+)
+
 // raid hashcode -> timestamp
 private val cooldowns = ConcurrentHashMap<Int, Long>()
 private val cooldownDuration = TimeUnit.MINUTES.toMillis(1)
+
+// Mojang name -> Dashed UUID cache
+private val mojangCache = ConcurrentHashMap<String, String>()
 
 fun shouldProcess(raidReport: RaidReport): Boolean {
     val now = System.currentTimeMillis()
@@ -96,15 +110,11 @@ suspend fun updateGuild() {
 
         val members = parsedJson["members"]!!.jsonObject
         guildMembers.clear()
+
         // first key is "total", skip
         for (rank in members.keys.drop(1)) {
             val rankObject = members[rank]?.jsonObject ?: continue
-            val playerNames = rankObject.values.mapNotNull { playerElement ->
-                playerElement.jsonObject["username"]?.jsonPrimitive?.content
-            }
-            val uuids = rankObject.keys
-
-            guildMembers.putAll(uuids.zip(playerNames))
+            guildMembers.addAll(rankObject.keys)
         }
         lastGuildUpdate = System.currentTimeMillis()
     } else {
@@ -119,10 +129,39 @@ suspend fun isInGuild(identifier: String): Boolean {
             updateGuild()
         }
 
-        return (identifier in guildMembers) || guildMembers.containsValue(identifier)
+        return identifier in guildMembers
 
     } finally {
         guildUpdateLock.unlock()
+    }
+}
+
+suspend fun getUuidFromName(name: String): String? {
+    val lowerName = name.lowercase()
+    mojangCache[lowerName]?.let { return it }
+
+    return try {
+        val response = client.get("https://api.mojang.com/users/profiles/minecraft/$name")
+        if (response.status.isSuccess()) {
+            val profile = response.body<MojangProfile>()
+
+            // make dashed to match Wynn API
+            val id = profile.id
+            val dashedUuid = "${id.substring(0, 8)}-${id.substring(8, 12)}-${id.substring(12, 16)}-${
+                id.substring(
+                    16,
+                    20
+                )
+            }-${id.substring(20)}"
+
+            mojangCache[lowerName] = dashedUuid
+            dashedUuid
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        logger.error("Failed to fetch UUID for player $name from Mojang API", e)
+        null
     }
 }
 
@@ -135,7 +174,7 @@ fun main() {
 
     embeddedServer(Netty, port = 8080) {
         install(ContentNegotiation) {
-            json(json = Json)
+            json(json = Json { ignoreUnknownKeys = true })
         }
         routing {
             post("/raid") {
@@ -146,25 +185,41 @@ fun main() {
                     return@post
                 }
 
-                val guildPlayers =
-                    raidReport.players.toMutableSet().apply { add(raidReport.reporterUuid) }.filter { !isInGuild(it) }
-                if (guildPlayers.isNotEmpty()) {
+                val resolvedUuids = mutableListOf<String>()
+                val unresolvedNames = mutableListOf<String>()
+
+                for (name in raidReport.players) {
+                    val uuid = getUuidFromName(name)
+                    if (uuid != null) {
+                        resolvedUuids.add(uuid)
+                    } else {
+                        unresolvedNames.add(name)
+                    }
+                }
+
+                if (unresolvedNames.isNotEmpty()) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        "Could not resolve UUIDs from Mojang for players: ${unresolvedNames.joinToString(", ")}"
+                    )
+                    logger.error("Mojang UUID resolution failed for names: ${unresolvedNames.joinToString(", ")}")
+                    return@post
+                }
+
+                // check both player list and raid reporter, bit redundant but whatever
+                val guildPlayersCheck = resolvedUuids.toMutableSet().apply { add(raidReport.reporterUuid) }
+                val unauthorizedPlayers = guildPlayersCheck.filter { !isInGuild(it) }
+
+                if (unauthorizedPlayers.isNotEmpty()) {
                     call.respond(
                         HttpStatusCode.Forbidden,
-                        "Unauthorized players in raid report: ${guildPlayers.joinToString(", ")}"
+                        "Unauthorized players in raid report: ${unauthorizedPlayers.joinToString(", ")}"
                     )
                     logger.error(
                         "Unauthorized players in raid report from ${raidReport.reporterUuid}: ${
-                            guildPlayers.joinToString(
-                                ", "
-                            )
+                            unauthorizedPlayers.joinToString(", ")
                         }"
                     )
-                    return@post
-                }
-                if (!isInGuild(raidReport.reporterUuid)) {
-                    call.respond(HttpStatusCode.Forbidden, "Unauthorized")
-                    logger.error("Unauthorized raid report from UUID: ${raidReport.reporterUuid}")
                     return@post
                 }
 
