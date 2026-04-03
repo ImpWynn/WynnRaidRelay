@@ -33,7 +33,8 @@ private val raids = mapOf(
     "The Canyon Colossus" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png",
     "The Nameless Anomaly" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png",
     "Orphion's Nexus of Light" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png",
-    "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png"
+    "Nest of the Grootslangs" to "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png",
+    "The Wartorn Palace" to "https://i.imgur.com/YZkZYlk.png", // todo: placeholder
 )
 
 @Volatile
@@ -83,11 +84,7 @@ fun shouldProcess(raidReport: RaidReport): Boolean {
 
     logger.debug("Processing raid report: type='{}', players={}", raidReport.raidType, raidReport.players)
 
-    val previous = cooldowns.putIfAbsent(raidKey, now)
-
-    if (previous == null) {
-        return true
-    }
+    val previous = cooldowns.putIfAbsent(raidKey, now) ?: return true
 
     val timeDiff = now - previous
 
