@@ -174,6 +174,11 @@ fun main() {
             json(json = Json { ignoreUnknownKeys = true })
         }
         routing {
+            // allow client to query list of raids so it can be synced without updating
+            get("/raid") {
+                call.respond(HttpStatusCode.OK, raids.keys.toList())
+            }
+
             post("/raid") {
                 val raidReport = call.receive<RaidReport>()
                 val raidImg = raids[raidReport.raidType] ?: run {
