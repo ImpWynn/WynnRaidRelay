@@ -40,7 +40,8 @@ private val raids = mapOf(
     "The Canyon Colossus" to RaidInfo(1, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/2/2d/TheCanyonColossusIcon.png"),
     "The Nameless Anomaly" to RaidInfo(2, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/9/92/TheNamelessAnomalyIcon.png"),
     "Orphion's Nexus of Light" to RaidInfo(3, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/6/63/Orphion%27sNexusofLightIcon.png"),
-    "Nest of the Grootslangs" to RaidInfo(4, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png")
+    "Nest of the Grootslangs" to RaidInfo(4, "https://static.wikia.nocookie.net/wynncraft_gamepedia_en/images/5/52/NestoftheGrootslangsIcon.png",
+    "The Wartorn Palace" to "https://i.imgur.com/YZkZYlk.png", // todo: placeholder)
 )
 
 @Serializable
@@ -190,6 +191,11 @@ fun main() {
             json(json = Json { ignoreUnknownKeys = true })
         }
         routing {
+            // allow client to query list of raids so it can be synced without updating
+            get("/raid") {
+                call.respond(HttpStatusCode.OK, raids.keys.toList())
+            }
+
             post("/raid") {
                 // Raid type check
                 val raidReport = call.receive<RaidReport>()
