@@ -4,6 +4,18 @@ services:
     ports:
       - "61000:8080"
     environment:
-      - GUILD
-      - DISCORD_WEBHOOK_URL
+      GUILD: ${GUILD}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      RABBIT_HOST: ${RABBIT_HOST}
+      RABBIT_PORT: ${RABBIT_PORT}
+      RABBIT_USER: ${RABBIT_USER}
+      RABBIT_PASS: ${RABBIT_PASS}
+      RABBIT_VHOST: ${RABBIT_VHOST}
     restart: unless-stopped
+    networks:
+      - imperial-net
+
+networks:
+  imperial-net:
+    external: true
+    name: imperial-net
