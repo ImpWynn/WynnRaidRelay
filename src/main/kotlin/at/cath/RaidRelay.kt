@@ -269,6 +269,29 @@ private fun escapeMarkdown(text: String): String {
 }
 
 private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
+    val fieldsList = raidObj.players.mapIndexed { index, player ->
+        """
+            {
+                "name": "Player ${index + 1}",
+                "value": "${escapeMarkdown(player)}",
+                "inline": true
+            }
+        """.trimIndent()
+    }.toMutableList()
+
+    if (fieldsList.size > 2) {
+        fieldsList.add(
+            2, """
+            {
+                "name": "\t",
+                "value": "\t"
+            }
+        """.trimIndent()
+        )
+    }
+
+    val fieldsJson = fieldsList.joinToString(",\n")
+
     return """
         {
             "content": null,
@@ -277,30 +300,7 @@ private fun raidMsg(raidObj: RaidReport, raidImgUrl: String): String {
                     "title": "Completion: ${escapeMarkdown(raidObj.raidType)}",
                     "color": null,
                     "fields": [
-                        {
-                            "name": "Player 1",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(0) { "N/A" })}",
-                            "inline": true
-                        },
-                        {
-                            "name": "Player 2",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(1) { "N/A" })}",
-                            "inline": true
-                        },
-                        {
-                            "name": "\t",
-                            "value": "\t"
-                        },
-                        {
-                            "name": "Player 3",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(2) { "N/A" })}",
-                            "inline": true
-                        },
-                        {
-                            "name": "Player 4",
-                            "value": "${escapeMarkdown(raidObj.players.getOrElse(3) { "N/A" })}",
-                            "inline": true
-                        }
+$fieldsJson
                     ],
                     "footer": {
                             "text": "+${raidObj.srGained} SR, +${raidObj.gxpGained} GXP",
